@@ -7,6 +7,9 @@ Type=simple
 ExecStart=/usr/bin/python3 /usr/local/bin/fanctl.py
 Restart=always
 RestartSec=5
+# DSM's systemd copies stdout to a log file on the system RAID, which wakes
+# the disks; fanctl already logs to /run. stderr kept for crash tracebacks.
+StandardOutput=null
 
 [Install]
 WantedBy=multi-user.target

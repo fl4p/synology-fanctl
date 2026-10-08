@@ -142,6 +142,19 @@ cat /var/log/fansweep.log
 systemctl start fanctl
 ```
 
+## Disk hibernation
+
+`fanctl` itself does not keep the disks awake:
+- it logs to `/run` (tmpfs);
+- its unit discards stdout, which DSM's systemd would otherwise copy to
+  `/var/log/systemd/` on the system RAID;
+- `hdparm -C` does not reset DSM's idle counter.
+
+To see what else wakes your disks, run `tools/wakewatch.sh` as root and
+leave the box alone for 45 minutes. It logs every disk-reaching I/O by
+process (`block_dump`) and every reset of the disks' `syno_idle_time` to
+`/run/wakewatch.log`.
+
 ## Porting to another model
 
 Check these before running the service on anything that is not a DS214play:
