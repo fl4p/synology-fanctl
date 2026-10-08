@@ -29,7 +29,9 @@ import time
 TTY = "/dev/ttyS1"
 CPU_JSON = "/run/hwmon/cpu_temperature.json"
 DISK_TEMP = "/run/synostorage/disks/{}/temperature"
-LOG = "/var/log/fanctl.log"
+# tmpfs: /var/log sits on the system RAID across all disks, so any write
+# there wakes them and a periodic status line would block hibernation.
+LOG = "/run/fanctl.log"
 
 PERIOD = 15          # s between decisions / duty writes
 HYST = 3             # C below a threshold before stepping down

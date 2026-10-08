@@ -87,7 +87,7 @@ As root on the NAS. SSH must be enabled; then `sudo -i`.
 cd /volume1/<share>
 git clone https://github.com/fl4p/synology-fanctl.git   # or copy the files
 sh synology-fanctl/install.sh
-tail -f /var/log/fanctl.log
+tail -f /run/fanctl.log
 ```
 
 `install.sh` is idempotent. It copies `fanctl.py` to `/usr/local/bin`,
