@@ -55,7 +55,7 @@ STATUS_EVERY = 600   # s between periodic status log lines
 # Measured 2026-10-08, idle, disks spinning: fan off -> SoC levels at ~79 C,
 # 5% -> ~52 C; 2-3% does not move air. scemd shuts down at CPU 95 C.
 DISK_CURVE = [(40, 5), (45, 20), (50, 40), (54, 99)]
-CPU_CURVE = [(83, 5), (87, 20), (90, 60), (93, 99)]
+CPU_CURVE = [(86, 5), (89, 20), (91, 60), (93, 99)]
 
 ALLOWED = {0, 5, 20, 40, 60, 99}
 KICK_DUTY = 20       # brief burst so a stopped fan starts at a low duty

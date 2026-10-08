@@ -50,13 +50,13 @@ re-send every 5 minutes was too slow. With 2 s, no fan events were logged in
 
 | Sensor | off | 5 % | 20 % | 40 % | 60 % | 99 % |
 |---|---|---|---|---|---|---|
-| SoC | < 83 °C | 83 | 87 | – | 90 | 93 |
+| SoC | < 86 °C | 86 | 89 | – | 91 | 93 |
 | hottest spinning disk | < 40 °C | 40 | 45 | 50 | – | 54 |
 
 - The fan follows whichever sensor wants more.
 - If all disks are in standby, only the SoC counts.
 - **Stepping down:** happens 3 °C below a threshold. The last step to *off* is
-  10 °C below for the SoC (off below 73 °C) and 3 °C for the disks.
+  10 °C below for the SoC (off below 76 °C) and 3 °C for the disks.
 - **Minimum on-time:** once started, the fan runs for at least 10 minutes,
   so it does not chatter.
 - **Kick-start:** a stopped fan does not start at 5 %, so each start gets

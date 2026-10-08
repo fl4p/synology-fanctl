@@ -4,16 +4,16 @@ D, C = f.DISK_CURVE, f.CPU_CURVE
 d = lambda c, t, p=0: f.duty_of(c, f.level(c, t, p))
 # thresholds
 assert [d(D,t) for t in (20,39,40,44,45,50,53,54,70,200)] == [0,0,5,5,20,40,40,99,99,99]
-assert [d(C,t) for t in (40,79,82,83,86,87,90,93,105)] == [0,0,0,5,5,20,60,99,99]
+assert [d(C,t) for t in (40,79,85,86,88,89,91,93,105)] == [0,0,0,5,5,20,60,99,99]
 # monotone over whole range from cold start, all duties allowed and '1'-free
 for c in (D,C):
     prev = -1
     for t in range(0,150):
         v = d(c,t); assert v >= prev, (t,v); prev = v
         assert v in f.ALLOWED and "1" not in "%02d" % v
-# hysteresis: cpu on at 83, off only below 73
-assert f.level(C,74,1,10)==1 and f.level(C,73,1,10)==1 and f.level(C,72,1,10)==0
-assert f.level(C,84,2,10)==2 and f.level(C,83,2,10)==1  # 87-level drops below 84
+# hysteresis: cpu on at 86, off only below 76
+assert f.level(C,77,1,10)==1 and f.level(C,76,1,10)==1 and f.level(C,75,1,10)==0
+assert f.level(C,86,2,10)==2 and f.level(C,85,2,10)==1  # 89-level drops below 86
 assert f.level(D,38,1,3)==1 and f.level(D,36,1,3)==0
 # decide(): standby / spinning / unevaluable
 class St: disk_lvl=0; cpu_lvl=0
@@ -21,7 +21,7 @@ f.data_disks = lambda: ["sda","sdb"]
 f.cpu_temp = lambda: 79
 f.in_standby = lambda d: True
 assert f.decide(St())[0] == 0
-f.cpu_temp = lambda: 84
+f.cpu_temp = lambda: 87
 assert f.decide(St())[0] == 5
 f.cpu_temp = lambda: 79
 f.in_standby = lambda d: d=="sdb"
