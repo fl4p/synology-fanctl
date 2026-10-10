@@ -155,6 +155,46 @@ leave the box alone for 45 minutes. It logs every disk-reaching I/O by
 process (`block_dump`) and every reset of the disks' `syno_idle_time` to
 `/run/wakewatch.log`.
 
+## Time Machine over SMB
+
+Not fan-related, but found on the same box. Time Machine backups to the NAS
+failed every few minutes with *"The network disk disconnected from your Mac
+while backing up"*, while the NAS itself was healthy.
+
+**Cause:** a deadlock in DSM's Samba (4.15, SMB Service package on DSM 7.1)
+with `use sendfile = yes`, the default. smbd is single-threaded per
+connection. It got stuck in a blocking `splice()` while sending read data to
+the Mac, so it stopped reading the Mac's queued writes. The Mac's sends then
+failed with `EAGAIN`, it dropped the connection, and Time Machine aborted.
+The signs:
+
+- `/var/log/samba/log.smbd`: `smb2_sendfile_send_data: sendfile failed for
+  file <name>.sparsebundle/bands/... (Broken pipe)`;
+- Mac: `log show --predicate 'sender == "smbfs"'` shows
+  `TRAN_SEND returned non-fatal error 35`, then a failed reconnect;
+- NAS: `netstat -tn` shows the port-445 connection with a large, constant
+  Recv-Q and Send-Q, and `/proc/<smbd pid>/syscall` is 313 (`splice`);
+- the next backup hangs at "Mounting disk image", because the stuck smbd
+  still holds the sparsebundle's locks (`smbstatus -L`).
+
+**Fix:** as root, run `sh tools/smb-nosendfile.sh`. It adds
+`use sendfile=no` to `[global]` in `/etc/samba/smb.conf`, keeps a backup
+copy of the file and reloads smbd. It is idempotent. A DSM or SMB Service
+update may rewrite `smb.conf`, so add it to the boot-up task too:
+`sh /volume1/<share>/synology-fanctl/tools/smb-nosendfile.sh`.
+
+Changing DSM's SMB settings did not rewrite `smb.conf` on DSM 7.1.1; DSM
+keeps those in `/etc/samba/smbinfo.conf`. A stuck smbd from an earlier
+attempt has to be killed (or the NAS restarted) before the fix takes effect.
+
+**Also enabled:** **Control Panel → File Services → SMB → Advanced →
+Durable handles** and **SMB2 leases**. With both, macOS can reconnect a Time
+Machine share after a short drop. Without leases it still logs "Durable
+Handle V2 or Persistent Handles not supported". These two settings alone did
+not stop the failures; disabling sendfile did. The first backup after the fix
+ran for 30 minutes without a drop, where the earlier ones failed within
+2–13 minutes.
+
 ## Porting to another model
 
 Check these before running the service on anything that is not a DS214play:
