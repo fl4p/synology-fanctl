@@ -29,6 +29,11 @@ import time
 TTY = "/dev/ttyS1"
 CPU_JSON = "/run/hwmon/cpu_temperature.json"
 DISK_TEMP = "/run/synostorage/disks/{}/temperature"
+IDLE_TIME = "/sys/block/{}/device/syno_idle_time"  # s since the last disk I/O
+SYNOINFO = "/etc/synoinfo.conf"
+# Treat a disk as asleep this many s before DSM spins it down, so the
+# smartctl fallback below can never be what touches a disk about to sleep.
+STANDBY_MARGIN = 60
 # tmpfs: /var/log sits on the system RAID across all disks, so any write
 # there wakes them and a periodic status line would block hibernation.
 LOG = "/run/fanctl.log"
@@ -97,20 +102,30 @@ def data_disks():
     return out
 
 
-def in_standby(disk):
-    """hdparm -C issues CHECK POWER MODE, which does not spin the disk up."""
+def standby_seconds():
+    """DSM's HDD hibernation time (Control Panel -> Hardware & Power), in s;
+    0 if hibernation is off."""
     try:
-        r = subprocess.run(["/usr/bin/hdparm", "-C", "/dev/" + disk],
-                           capture_output=True, text=True, timeout=20)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise Unevaluable("hdparm %s: %s" % (disk, e))
-    if r.returncode != 0:
-        raise Unevaluable("hdparm %s rc=%d" % (disk, r.returncode))
-    if "standby" in r.stdout or "sleeping" in r.stdout:
-        return True
-    if "active/idle" in r.stdout or "idle" in r.stdout:
-        return False
-    raise Unevaluable("hdparm %s: unknown state %r" % (disk, r.stdout.strip()))
+        for line in open(SYNOINFO):
+            k, _, v = line.partition("=")
+            if k.strip() == "standbytimer":
+                return int(v.strip().strip('"')) * 60
+    except (OSError, ValueError) as e:
+        raise Unevaluable("%s: %s" % (SYNOINFO, e))
+    return 0
+
+
+def in_standby(disk):
+    """Decided from DSM's idle counter in sysfs, never by asking the disk:
+    on this kernel any ATA command to a sleeping disk, even CHECK POWER MODE
+    (hdparm -C, smartctl -n standby), spins it up again (measured 2026-10-27:
+    with a 15 s hdparm -C poll the disks woke ~10 s after every spin-down)."""
+    timer = standby_seconds()
+    try:
+        idle = int(open(IDLE_TIME.format(disk)).read().strip())
+    except (OSError, ValueError) as e:
+        raise Unevaluable("%s idle time: %s" % (disk, e))
+    return timer > 0 and idle >= timer - STANDBY_MARGIN
 
 
 def read_fresh(path, max_age):
@@ -142,7 +157,8 @@ def cpu_temp():
 
 
 def smart_temp(disk):
-    """Fallback when DSM's file is stale; -n standby never wakes the disk."""
+    """Fallback when DSM's file is stale. Only called for a disk that
+    in_standby() says is spinning: on a sleeping disk this would wake it."""
     try:
         r = subprocess.run(["/usr/bin/smartctl", "-n", "standby", "-A",
                             "-d", "sat", "/dev/" + disk],

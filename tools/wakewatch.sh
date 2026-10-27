@@ -14,7 +14,11 @@ trap 'exit 1' INT TERM
 : > "$OUT"
 log() { echo "$(date +%T) $*" >> "$OUT"; }
 idle() { for d in $DISKS; do printf "%s=%s " "$d" "$(cat /sys/block/$d/device/syno_idle_time)"; done; }
-state() { for d in $DISKS; do printf "%s=%s " "$d" "$(hdparm -C /dev/$d 2>/dev/null | awk '/state/ {print $NF}')"; done; }
+# Never ask the disks for their power state: on DSM's kernel even hdparm -C
+# spins a sleeping disk up. Infer it from DSM's hibernation timer instead.
+TIMER=$(sed -n 's/^standbytimer="\([0-9]*\)"/\1/p' /etc/synoinfo.conf)
+TIMER=$(( ${TIMER:-0} * 60 ))
+state() { for d in $DISKS; do i=$(cat /sys/block/$d/device/syno_idle_time); [ "$TIMER" -gt 0 ] && [ "$i" -ge "$TIMER" ] && s=asleep || s=spinning; printf "%s=%s " "$d" "$s"; done; }
 
 dmesg -c > /dev/null
 echo 1 > /proc/sys/vm/block_dump

@@ -15,6 +15,23 @@ for c in (D,C):
 assert f.level(C,77,1,10)==1 and f.level(C,76,1,10)==1 and f.level(C,75,1,10)==0
 assert f.level(C,86,2,10)==2 and f.level(C,85,2,10)==1  # 89-level drops below 86
 assert f.level(D,38,1,3)==1 and f.level(D,36,1,3)==0
+# in_standby(): from DSM's idle counter only, never a command to the disk
+tmp=tempfile.mkdtemp(); f.SYNOINFO=tmp+"/synoinfo.conf"; f.IDLE_TIME=tmp+"/{}"
+def boom(*a, **k): raise SystemExit("in_standby must not send a disk command")
+real_run=f.subprocess.run; f.subprocess.run=boom
+def sb(timer, idle):
+    open(f.SYNOINFO,"w").write('x="1"\nstandbytimer="%s"\n' % timer)
+    open(tmp+"/sda","w").write("%d\n" % idle); return f.in_standby("sda")
+assert [sb(20,i) for i in (0,1139,1140,1205,99999)] == [False,False,True,True,True]
+assert sb(0,99999) is False                    # hibernation off: never asleep
+open(f.SYNOINFO,"w").write("nothing=1\n"); assert f.in_standby("sda") is False
+os.remove(tmp+"/sda")
+try: f.in_standby("sda"); raise SystemExit("no raise")
+except f.Unevaluable: pass
+os.remove(f.SYNOINFO)
+try: f.in_standby("sda"); raise SystemExit("no raise")
+except f.Unevaluable: pass
+f.subprocess.run=real_run
 # decide(): standby / spinning / unevaluable
 class St: disk_lvl=0; cpu_lvl=0
 f.data_disks = lambda: ["sda","sdb"]

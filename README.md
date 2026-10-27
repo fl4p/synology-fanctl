@@ -36,8 +36,12 @@ digits contain no `1`, and asserts this before every write.
 - **SoC temperature**: `/run/hwmon/cpu_temperature.json`, written by scemd
   about every 60 s;
 - **disk temperatures**: `/run/synostorage/disks/sdX/temperature`, written by
-  DSM about every 30 s, with `smartctl -n standby` as a fallback;
-- **disk power state**: `hdparm -C`, which does not spin a disk up.
+  DSM about every 30 s, with `smartctl` as a fallback for disks that are
+  spinning;
+- **disk sleep state**: inferred from DSM's idle counter
+  (`/sys/block/sdX/device/syno_idle_time`) and its HDD hibernation time
+  (`standbytimer` in `/etc/synoinfo.conf`). The disks themselves are never
+  asked (see [Disk hibernation](#disk-hibernation)).
 
 Every 2 s it re-sends `t` and the current duty. That re-send is needed:
 once the box is warm, scemd re-enables the fan check by itself. A stopped
@@ -148,12 +152,25 @@ systemctl start fanctl
 - it logs to `/run` (tmpfs);
 - its unit discards stdout, which DSM's systemd would otherwise copy to
   `/var/log/systemd/` on the system RAID;
-- `hdparm -C` does not reset DSM's idle counter.
+- it never sends a command to a disk that may be asleep.
+
+**Do not poll a sleeping disk, not even for its power state.** On DSM
+7.1.1 (kernel 3.2), any ATA command to a sleeping disk spins it up again,
+including `hdparm -C` and `smartctl -n standby`, which are meant to be
+safe. On a spinning disk they do not reset the idle counter, so the problem
+only shows once the disks actually fall asleep. Earlier versions of fanctl
+ran `hdparm -C` every 15 s. The disks fell asleep after the 20-minute
+hibernation time and were woken about 10 s later, every time. scemd logged
+`The internal disks wake up, hibernate from [...]` roughly every 21 minutes.
+Since fanctl infers the state from `syno_idle_time`, the disks stay asleep
+(measured 2026-10-27, DS214play).
 
 To see what else wakes your disks, run `tools/wakewatch.sh` as root and
 leave the box alone for 45 minutes. It logs every disk-reaching I/O by
 process (`block_dump`) and every reset of the disks' `syno_idle_time` to
-`/run/wakewatch.log`.
+`/run/wakewatch.log`. A wake-up caused by a disk command, not file I/O,
+leaves no `block_dump` line: look for a reset straight after the disks
+fall asleep, and for scemd's wake-up message in `/var/log/scemd.log`.
 
 ## Time Machine over SMB
 
