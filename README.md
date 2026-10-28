@@ -165,6 +165,37 @@ hibernation time and were woken about 10 s later, every time. scemd logged
 Since fanctl infers the state from `syno_idle_time`, the disks stay asleep
 (measured 2026-10-27, DS214play).
 
+### Are the disks asleep right now?
+
+Logging in to find out wakes them: an SSH or DSM login writes logs to the
+system RAID, which lives on the disks. fanctl therefore answers on a
+read-only status page, from memory and sysfs only:
+
+```console
+$ curl http://<nas>:8765/
+{
+ "time": "2026-10-28T11:02:10",
+ "hibernate_after_s": 1200,
+ "disks": {
+  "sda": {"state": "asleep", "idle_s": 1650, "asleep_since": "2026-10-28T10:54:40"},
+  "sdb": {"state": "asleep", "idle_s": 1650, "asleep_since": "2026-10-28T10:54:40"}
+ },
+ "wakes": [{"at": "2026-10-28T09:46:52", "disk": "sda", "slept_s": 3027}],
+ "fan_pct": 0,
+ "decision": "cpu=79 disks=standby",
+ "decided_at": "2026-10-28T11:02:03"
+}
+```
+
+- `state` is inferred like DSM does: `asleep` once the disk has been idle
+  for the full hibernation time. The disk is never asked.
+- `wakes` lists the last 20 wake-ups fanctl saw since it started, newest
+  first. They are sampled every 15 s, so a shorter sleep can be missed.
+- An unreadable input returns HTTP 500, never a guessed state.
+- There is no authentication. Anyone on the LAN can read temperatures, fan
+  duty and disk state; nothing can be changed. Set `STATUS_PORT = 0` in
+  `fanctl.py` to turn it off.
+
 To see what else wakes your disks, run `tools/wakewatch.sh` as root and
 leave the box alone for 45 minutes. It logs every disk-reaching I/O by
 process (`block_dump`) and every reset of the disks' `syno_idle_time` to

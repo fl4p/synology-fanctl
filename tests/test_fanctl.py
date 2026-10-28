@@ -64,4 +64,33 @@ assert m(5,0.0,100)[:2]==(5,100)
 assert m(0,100,100+599)[0]==5
 assert m(0,100,100+600)[:2]==(0,0.0)
 assert m(0,0.0,5)[:2]==(0,0.0)
+# status: asleep only after the full hibernation time; wakes tracked in memory
+f.standby_seconds = lambda: 1200
+idle = {"sda": 1199, "sdb": 1200}
+f.idle_seconds = lambda d: idle[d]
+f.TRACKER = f.SleepTracker()
+doc = f.status_doc(10000)
+assert doc["disks"]["sda"]["state"] == "spinning" and doc["disks"]["sda"]["sleeps_in_s"] == 1
+assert doc["disks"]["sdb"]["state"] == "asleep" and doc["disks"]["sdb"]["asleep_since"] == f.iso(10000)
+assert doc["wakes"] == []
+idle = {"sda": 5000, "sdb": 3000}; f.status_doc(13800)
+idle = {"sda": 3, "sdb": 3010}; doc = f.status_doc(13810)
+assert [(w["disk"], w["slept_s"]) for w in doc["wakes"]] == [("sda", 3800)], doc["wakes"]
+assert doc["wakes"][0]["at"] == f.iso(13807) and doc["disks"]["sdb"]["state"] == "asleep"
+f.standby_seconds = lambda: 0                   # hibernation off: never asleep
+assert f.status_doc(14000)["disks"]["sdb"]["state"] == "spinning"
+for i in range(60): f.TRACKER.sample(i * 10, 5, {"sda": 9 if i % 2 else 0})
+assert len(f.TRACKER.wakes) == f.WAKES_KEPT
+# status over HTTP; an unreadable input is a 500, never "spinning"
+import json, urllib.request, urllib.error
+f.standby_seconds = lambda: 1200
+srv = f.HTTPServer(("127.0.0.1", 0), f.StatusHandler)
+f.threading.Thread(target=srv.serve_forever, daemon=True).start()
+url = "http://127.0.0.1:%d/" % srv.server_port
+assert json.load(urllib.request.urlopen(url))["disks"]["sdb"]["state"] == "asleep"
+def gone(d): raise f.Unevaluable("x")
+f.idle_seconds = gone
+try: urllib.request.urlopen(url); raise SystemExit("no 500")
+except urllib.error.HTTPError as e: assert e.code == 500
+srv.shutdown()
 print("ALL OK")

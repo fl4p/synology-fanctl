@@ -24,7 +24,9 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 TTY = "/dev/ttyS1"
 CPU_JSON = "/run/hwmon/cpu_temperature.json"
@@ -55,6 +57,11 @@ DISK_STALE = 120     # s; DSM refreshes ~30 s while disks spin
 FAILSAFE = 99
 EXIT_DUTY = 60       # duty left behind when the controller stops
 STATUS_EVERY = 600   # s between periodic status log lines
+# Read-only JSON status on the LAN (0 = off). Answered from memory and sysfs,
+# so asking whether the disks sleep does not wake them, unlike an SSH or DSM
+# login, which writes logs to the system RAID.
+STATUS_PORT = 8765
+WAKES_KEPT = 20
 
 # (threshold C, duty %), ascending; below the first threshold -> 0 (off).
 # Measured 2026-10-08, idle, disks spinning: fan off -> SoC levels at ~79 C,
@@ -115,16 +122,20 @@ def standby_seconds():
     return 0
 
 
+def idle_seconds(disk):
+    try:
+        return int(open(IDLE_TIME.format(disk)).read().strip())
+    except (OSError, ValueError) as e:
+        raise Unevaluable("%s idle time: %s" % (disk, e))
+
+
 def in_standby(disk):
     """Decided from DSM's idle counter in sysfs, never by asking the disk:
     on this kernel any ATA command to a sleeping disk, even CHECK POWER MODE
     (hdparm -C, smartctl -n standby), spins it up again (measured 2026-10-27:
     with a 15 s hdparm -C poll the disks woke ~10 s after every spin-down)."""
     timer = standby_seconds()
-    try:
-        idle = int(open(IDLE_TIME.format(disk)).read().strip())
-    except (OSError, ValueError) as e:
-        raise Unevaluable("%s idle time: %s" % (disk, e))
+    idle = idle_seconds(disk)
     return timer > 0 and idle >= timer - STANDBY_MARGIN
 
 
@@ -249,6 +260,91 @@ class State:
     cpu_lvl = 0
 
 
+def iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))
+
+
+class SleepTracker:
+    """Remembers when disks woke, from drops of their idle counter after it
+    passed the hibernation time. Sampled every PERIOD and on each status
+    request, so a sleep shorter than that can be missed."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.prev = {}
+        self.wakes = []  # (time, disk, slept s), newest last
+
+    def sample(self, now, timer, idles):
+        with self.lock:
+            for d, idle in idles.items():
+                p = self.prev.get(d)
+                if timer > 0 and p is not None and p >= timer and idle < p:
+                    self.wakes.append((now - idle, d, p - timer))
+                    del self.wakes[:-WAKES_KEPT]
+                self.prev[d] = idle
+
+
+TRACKER = SleepTracker()
+STATUS = {"fan_pct": None, "decision": None, "decided_at": None}
+
+
+def sample_disks(now):
+    """Returns (hibernation time s, {disk: idle s}) and feeds TRACKER."""
+    timer = standby_seconds()
+    idles = {d: idle_seconds(d) for d in data_disks()}
+    TRACKER.sample(now, timer, idles)
+    return timer, idles
+
+
+def status_doc(now):
+    """Disk state as DSM would see it: asleep once a disk has been idle for
+    the full hibernation time. Inferred, never asked from the disk."""
+    timer, idles = sample_disks(now)
+    disks = {}
+    for d, idle in idles.items():
+        asleep = timer > 0 and idle >= timer
+        disks[d] = {"state": "asleep" if asleep else "spinning", "idle_s": idle}
+        if asleep:
+            disks[d]["asleep_since"] = iso(now - idle + timer)
+        elif timer > 0:
+            disks[d]["sleeps_in_s"] = timer - idle
+    with TRACKER.lock:
+        wakes = [{"at": iso(t), "disk": d, "slept_s": s}
+                 for t, d, s in reversed(TRACKER.wakes)]
+    return {"time": iso(now), "hibernate_after_s": timer, "disks": disks,
+            "wakes": wakes, "fan_pct": STATUS["fan_pct"],
+            "decision": STATUS["decision"], "decided_at": STATUS["decided_at"]}
+
+
+class StatusHandler(BaseHTTPRequestHandler):
+    timeout = 5
+
+    def do_GET(self):
+        try:
+            code, doc = 200, status_doc(time.time())
+        except Exception as e:  # unevaluable is an error, never "spinning"
+            code, doc = 500, {"error": str(e)}
+        body = (json.dumps(doc, indent=1) + "\n").encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass  # stderr goes to the journal on the system RAID
+
+
+def serve_status(port):
+    try:
+        srv = HTTPServer(("", port), StatusHandler)
+    except OSError as e:
+        log("status port %d: %s" % (port, e))
+        return
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    log("status on http://:%d/" % port)
+
+
 def decide(st):
     """Return (duty, description). Raises Unevaluable on bad input."""
     disks = data_disks()
@@ -290,6 +386,8 @@ def main():
 
     signal.signal(signal.SIGTERM, on_term)
     signal.signal(signal.SIGINT, on_term)
+    if STATUS_PORT and not once:
+        serve_status(STATUS_PORT)
     log("start: period=%ds disk=%s cpu=%s hyst=%d off_hyst=%s min_on=%ds "
         "failsafe=%d%s" % (PERIOD, DISK_CURVE, CPU_CURVE, HYST, OFF_HYST,
                            MIN_ON, FAILSAFE, " DRY-RUN" if dry else ""))
@@ -308,6 +406,11 @@ def main():
         now = time.time()
         duty, on_since, note = apply_min_on(duty, on_since, now)
         desc += note
+        try:
+            sample_disks(now)
+        except Unevaluable:
+            pass  # decide() has already failed safe on the same input
+        STATUS.update(fan_pct=duty, decision=desc, decided_at=iso(now))
         kick = bool(duty and not last and duty < KICK_DUTY)
         if duty != last or now - last_status >= STATUS_EVERY or once:
             log("fan %2d%%  %s%s" % (duty, desc, " (kick-start)" if kick else ""))
